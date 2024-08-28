@@ -45,6 +45,11 @@ func TestRESPParser(t *testing.T) {
 			res:  Array{"3", "2324"},
 		},
 		{
+			name: "测试Array，-1",
+			row:  []byte("*-1\r\n"),
+			res:  Array{},
+		},
+		{
 			name: "测试BulkString",
 			row:  []byte("$3\r\n232\r\n"),
 			res:  BulkStrings("232"),
@@ -52,8 +57,9 @@ func TestRESPParser(t *testing.T) {
 		{
 			name: "測試BulkErr",
 			row:  []byte("!3\r\nERR\r\n"),
-			res: MultiErr(errors.New(
-				"ERR")),
+			res: MultiErr{
+				err: "ERR",
+			},
 		},
 		{
 			name: "測試Verbatim",
@@ -173,13 +179,18 @@ func TestRespSvc_BuildingRedisExecuteRESP(t *testing.T) {
 			res:  []byte("*2\r\n$1\r\n3\r\n$4\r\n2324\r\n"),
 		},
 		{
+			name: "测试Array,-1",
+			data: Array{},
+			res:  []byte("*-1\r\n"),
+		},
+		{
 			name: "测试BulkString",
 			data: BulkStrings("232"),
 			res:  []byte("$3\r\n232\r\n"),
 		},
 		{
 			name: "測試BulkErr",
-			data: MultiErr(errors.New("ERR")),
+			data: MultiErr{err: "ERR"},
 			res:  []byte("!3\r\nERR\r\n"),
 		},
 		{
@@ -199,9 +210,11 @@ func TestRespSvc_BuildingRedisExecuteRESP(t *testing.T) {
 			res: []byte("%2\r\n+first\r\n:1\r\n+second\r\n:2\r\n"),
 		},
 		{
+			// 顺序可能不同
 			name: "测试Sets",
 			data: gttype.NewHashSet[any]().Add(BulkStrings("foo")).Add(BulkStrings("bar")),
-			res:  []byte("~2\r\n$3\r\nfoo\r\n$3\r\nbar\r\n"),
+			//res:  []byte("~2\r\n$3\r\nfoo\r\n$3\r\nbar\r\n"),
+			res: []byte("~2\r\n$3\r\nbar\r\n$3\r\nfoo\r\n"),
 		},
 		{
 			name: "测试Push堆",
@@ -301,5 +314,76 @@ func TestNewRESP(t *testing.T) {
 			t.Logf("%v", arr)
 		}
 	}
+}
 
+func TestRespSvc_ValidRESP(t *testing.T) {
+	testCases := []struct {
+		name string
+		row  []byte
+		res  bool
+	}{
+		{
+			name: "測試簡單String，正确",
+			row:  []byte("+OK\r\n"),
+			res:  true,
+		},
+		{
+			name: "測試簡單String，错误",
+			row:  []byte("+OK\\n"),
+			res:  false,
+		},
+		{
+			name: "测试Int",
+			row:  []byte(":2324\r\n"),
+			res:  true,
+		},
+		{
+			name: "测试Bool，正确",
+			row:  []byte("#t\r\n"),
+			res:  true,
+		},
+		{
+			name: "测试Bool，错误",
+			row:  []byte("#a\r\n"),
+			res:  false,
+		},
+		{
+			name: "测试大数，正确",
+			row:  []byte("(3492890328409238509324850943850943825024385\r\n"),
+			res:  true,
+		},
+		{
+			name: "测试大数，错误",
+			row:  []byte("(349289032a409238509324850943850943825024385\r\n"),
+			res:  false,
+		},
+		{
+			name: "测试Nil，正确",
+			row:  []byte("_\r\n"),
+			res:  true,
+		},
+		{
+			name: "测试Nil，错误",
+			row:  []byte("_-1\r\n"),
+			res:  false,
+		},
+		{
+			name: "测试Error，正确",
+			row:  []byte("-ERR\r\n"),
+			res:  true,
+		},
+		{
+			name: "测试Error，错误",
+			row:  []byte("-ERR\n"),
+			res:  false,
+		},
+	}
+	for _, v := range testCases {
+		t.Run(v.name, func(t *testing.T) {
+			resp := NewRESP()
+			res, err := resp.ValidRESP(v.row)
+			assert.Equal(t, v.res, res, "結果應該相同")
+			t.Logf("err:%v", err)
+		})
+	}
 }

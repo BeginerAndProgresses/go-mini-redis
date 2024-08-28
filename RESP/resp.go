@@ -3,6 +3,7 @@ package resp
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	gttype "github.com/BeginerAndProgresses/generalized-tools/type"
 	"log/slog"
 	"math/big"
@@ -56,7 +57,9 @@ type (
 	BulkStrings string
 
 	//MultiErr 对应批量错误类型
-	MultiErr error
+	MultiErr struct {
+		err string
+	}
 
 	//Verbatim 对应逐字字符串类型
 	Verbatim struct {
@@ -74,10 +77,14 @@ type (
 	Pushes gttype.MinHeap[any]
 )
 
+func (e *MultiErr) Error() string {
+	return e.err
+}
+
 type RESP interface {
 	Parse(data []byte) (parseAfter []byte, res any)
 	BuildingRedisExecuteRESP(data any) *respSvc
-	IsRedisExecuteRESP(resp []byte) bool
+	ValidRESP(resp []byte) (bool, error)
 }
 
 type respSvc struct {
@@ -133,6 +140,9 @@ func (r *respSvc) Parse(data []byte) (parseAfter []byte, res any) {
 			slog.Error("解析批量错误类型失败", slog.Any("err", err))
 			return nil, err
 		}
+		if nlen < 0 {
+			return after, Array{}
+		}
 		var arr Array = make([]interface{}, nlen)
 		for i := 0; i < len(arr); i++ {
 			after, arr[i] = r.Parse(after)
@@ -152,9 +162,11 @@ func (r *respSvc) Parse(data []byte) (parseAfter []byte, res any) {
 		var me MultiErr
 		after, res = r.Parse(after)
 		if resStr, ok := res.(string); ok {
-			me = errors.New(resStr)
+			me = MultiErr{
+				err: resStr,
+			}
 		} else {
-			me = nil
+			me = MultiErr{}
 		}
 		return after, me
 	case typeVervatimSign:
@@ -264,7 +276,11 @@ func (r *respSvc) BuildingRedisExecuteRESP(data any) *respSvc {
 	case Array:
 		arr := data.(Array)
 		buffer.WriteByte(typeArrSign)
-		buffer.WriteString(strconv.Itoa(len(arr)))
+		if len(arr) == 0 {
+			buffer.WriteString("-1")
+		} else {
+			buffer.WriteString(strconv.Itoa(len(arr)))
+		}
 		buffer.Write([]byte("\r\n"))
 		r.cerRESP = append(r.cerRESP, buffer.Bytes()...)
 		for _, v := range arr {
@@ -378,9 +394,91 @@ func (r *respSvc) BuildingRedisExecuteRESP(data any) *respSvc {
 func (r *respSvc) clearCurRESP() {
 	r.cerRESP = make([]byte, 0)
 }
-func (r *respSvc) IsRedisExecuteRESP(resp []byte) bool {
-	//TODO implement me
-	panic("implement me")
+
+// ValidRESP 验证RESP格式
+func (r *respSvc) ValidRESP(resp []byte) (bool, error) {
+	if len(resp) < 3 {
+		return false, errors.New("row长度小于3")
+	}
+	if !bytes.HasSuffix(resp, []byte("\r\n")) {
+		return false, errors.New("结尾不是\\r\\n")
+	}
+	before, _, _ := bytes.Cut(resp, []byte("\r\n"))
+	before = before[1:]
+	switch resp[0] {
+	case typeArrSign:
+		//if string(before) == "-1" && !ok {
+		//	return true, nil
+		//}
+		//if ok {
+		//	nlen, err := strconv.Atoi(string(before))
+		//	if err != nil {
+		//		return false, err
+		//	}
+		//	if nlen < 0 {
+		//		return false, errors.New("数组长度小于0")
+		//	} else if nlen == 0 {
+		//
+		//	} else {
+		//		if !ok {
+		//			return false, errors.New("数组长度不为-1，但数据为空")
+		//		}
+		//		for i := 0; i < nlen; i++ {
+		//			, err := r.ValidRESP(after)
+		//
+		//			if ! {
+		//				return false, errors.New("数组数据格式错误")
+		//			}
+		//		}
+		//	}
+		//}
+	case typeBulkStringsSign:
+	case typeMultiErrSign:
+	case typeSetsSign:
+	case typeVervatimSign:
+	case typeMapsSign:
+	case typePushesSign:
+	case typeStrSign:
+		return true, nil
+	case typeIntSign:
+		_, err := strconv.ParseInt(string(before), 10, 64)
+		if err != nil {
+			return false, err
+		}
+		return true, nil
+	case typeErrSign:
+		return true, nil
+	case typeNullSign:
+		if len(before) == 0 {
+			return true, nil
+		}
+		return false, errors.New("不为-1\\r\\n")
+	case typeBoolSign:
+		if len(before) != 1 {
+			return false, errors.New("bool标志不为t或f")
+		}
+		switch before[0] {
+		case 't', 'f':
+			return true, nil
+		default:
+			return false, errors.New("不为t或f")
+		}
+	case typeDoublesSign:
+		_, err := strconv.ParseFloat(string(before), 64)
+		if err != nil {
+			return false, err
+		}
+		return true, nil
+	case typeBigNumbersSign:
+		_, b := big.NewInt(0).SetString(string(before), 10)
+		if !b {
+			return false, errors.New(fmt.Sprintf("%v 不是数字", string(before)))
+		}
+		return true, nil
+	default:
+		return false, errors.New(fmt.Sprintf("不支持的类型:%b", resp[0]))
+	}
+	return false, nil
 }
 
 func NewRESP() RESP {
