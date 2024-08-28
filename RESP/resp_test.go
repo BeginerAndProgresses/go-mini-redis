@@ -289,3 +289,17 @@ func TestType(t *testing.T) {
 	// types.Nil{} 是結構體
 	//assert.Equal(t, types.Nil{}, nil)
 }
+
+func TestNewRESP(t *testing.T) {
+	resp := NewRESP()
+	row := []byte("*2\r\n$3\r\nget\r\n$1\r\na\r\n")
+	after, res := resp.Parse(row)
+	if len(after) > 0 {
+		t.Logf("after:%s", after)
+	} else {
+		for _, arr := range res.(Array) {
+			t.Logf("%v", arr)
+		}
+	}
+
+}
