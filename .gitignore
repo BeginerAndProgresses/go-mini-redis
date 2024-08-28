@@ -25,7 +25,7 @@ go.work.sum
 .env
 
 # idea
-.idea
+.idea/
 
 # excuter
-bin
+bin/
