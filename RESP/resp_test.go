@@ -156,10 +156,7 @@ func TestRESPParser(t *testing.T) {
 			if v.before != nil {
 				v.res = v.before()
 			}
-			after, parse := res.Parse(v.row)
-			if len(after) > 0 {
-				t.Logf("after:%s", after)
-			}
+			parse := res.Parse(v.row)
 			t.Logf("sum:%v,%T", parse, parse)
 			assert.Equal(t, v.res, parse, "結果應該相同")
 		})
@@ -306,13 +303,9 @@ func TestType(t *testing.T) {
 func TestNewRESP(t *testing.T) {
 	resp := NewRESP()
 	row := []byte("*2\r\n$3\r\nget\r\n$1\r\na\r\n")
-	after, res := resp.Parse(row)
-	if len(after) > 0 {
-		t.Logf("after:%s", after)
-	} else {
-		for _, arr := range res.(Array) {
-			t.Logf("%v", arr)
-		}
+	res := resp.Parse(row)
+	for _, arr := range res.(Array) {
+		t.Logf("%v", arr)
 	}
 }
 
@@ -375,6 +368,111 @@ func TestRespSvc_ValidRESP(t *testing.T) {
 		{
 			name: "测试Error，错误",
 			row:  []byte("-ERR\n"),
+			res:  false,
+		},
+		{
+			name: "测试Array，正确",
+			row:  []byte("*2\r\n+get\r\n+a\r\n"),
+			res:  true,
+		},
+		{
+			name: "测试Array，缺少值",
+			row:  []byte("*3\r\n+get\r\n+a\r\n"),
+			res:  false,
+		},
+		{
+			name: "测试Array，多值",
+			row:  []byte("*1\r\n+get\r\n+a\r\n"),
+			res:  false,
+		},
+		{
+			name: "测试Array，非数字",
+			row:  []byte("*a\r\n+get\r\n+a\r\n"),
+			res:  false,
+		},
+		{
+			name: "测试Array，空正确",
+			row:  []byte("*-1\r\n"),
+			res:  true,
+		},
+		{
+			name: "测试Array，空错误",
+			row:  []byte("*-2\r\n"),
+			res:  false,
+		},
+		{
+			name: "测试BulkString，正确",
+			row:  []byte("$3\r\nfoo\r\n"),
+			res:  true,
+		},
+		{
+			name: "测试BulkString，错误",
+			row:  []byte("$3\r\nfoo"),
+			res:  false,
+		},
+		{
+			name: "测试BulkString，少值",
+			row:  []byte("$3\r\nfo\r\n"),
+			res:  false,
+		},
+		{
+			name: "测试BulkString，多值",
+			row:  []byte("$3\r\nfoo\r\n$3\r\nbar\r\n"),
+			res:  false,
+		},
+		{
+			name: "测试BulkErr，正确",
+			row:  []byte("!3\r\nERR\r\n"),
+			res:  true,
+		},
+		{
+			name: "测试BulkErr，错误",
+			row:  []byte("!3\r\nER\n"),
+			res:  false,
+		},
+		{
+			name: "测试Sets，正确",
+			row:  []byte("~2\r\n$3\r\nfoo\r\n$3\r\nbar\r\n"),
+			res:  true,
+		},
+		{
+			name: "测试Sets，错误",
+			row:  []byte("~3\r\n$3\r\nfoo\r\n$3\r\nbar\r\n"),
+			res:  false,
+		},
+		{
+			name: "测试Verbatim，正确",
+			row:  []byte("=15\r\ntxt:Some string\r\n"),
+			res:  true,
+		},
+		{
+			name: "测试Verbatim，错误",
+			row:  []byte("=15\r\n"),
+			res:  false,
+		},
+		{
+			name: "测试Verbatim，错误",
+			row:  []byte("=4\r\nsdad\r\n"),
+			res:  false,
+		},
+		{
+			name: "测试Map，正确",
+			row:  []byte("%1\r\n$3\r\nfoo\r\n$3\r\nbar\r\n"),
+			res:  true,
+		},
+		{
+			name: "测试Map，错误",
+			row:  []byte("%2\r\n$3\r\nfoo\r\n$3\r\nbar\r\n"),
+			res:  false,
+		},
+		{
+			name: "测试Push，正确",
+			row:  []byte(">2\r\n$1\r\n1\r\n$1\r\n2\r\n"),
+			res:  true,
+		},
+		{
+			name: "测试Push，错误",
+			row:  []byte(">1\r\n$1\r\n1\r\n$1\r\n2\r\n"),
 			res:  false,
 		},
 	}

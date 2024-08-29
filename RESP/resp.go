@@ -82,7 +82,7 @@ func (e *MultiErr) Error() string {
 }
 
 type RESP interface {
-	Parse(data []byte) (parseAfter []byte, res any)
+	Parse(data []byte) any
 	BuildingRedisExecuteRESP(data any) *respSvc
 	ValidRESP(resp []byte) (bool, error)
 }
@@ -100,7 +100,15 @@ func (r *respSvc) Build() []byte {
 }
 
 // Parse 根据Row解析RESP
-func (r *respSvc) Parse(data []byte) (parseAfter []byte, res any) {
+func (r *respSvc) Parse(data []byte) any {
+	after, res := r.parseData(data)
+	if len(after) == 0 {
+		return res
+	}
+	return nil
+}
+
+func (r *respSvc) parseData(data []byte) (parseAfter []byte, res any) {
 	if len(data) < 2 {
 		return []byte(""), nil
 	}
@@ -145,12 +153,12 @@ func (r *respSvc) Parse(data []byte) (parseAfter []byte, res any) {
 		}
 		var arr Array = make([]interface{}, nlen)
 		for i := 0; i < len(arr); i++ {
-			after, arr[i] = r.Parse(after)
+			after, arr[i] = r.parseData(after)
 		}
 		return after, arr
 	case typeBulkStringsSign:
 		var bs BulkStrings
-		after, res = r.Parse(after)
+		after, res = r.parseData(after)
 		// 如果是字符串类型,直接轉為字節數組
 		if resStr, ok := res.(string); ok {
 			bs = BulkStrings(resStr)
@@ -160,7 +168,7 @@ func (r *respSvc) Parse(data []byte) (parseAfter []byte, res any) {
 		return after, bs
 	case typeMultiErrSign:
 		var me MultiErr
-		after, res = r.Parse(after)
+		after, res = r.parseData(after)
 		if resStr, ok := res.(string); ok {
 			me = MultiErr{
 				err: resStr,
@@ -170,7 +178,7 @@ func (r *respSvc) Parse(data []byte) (parseAfter []byte, res any) {
 		}
 		return after, me
 	case typeVervatimSign:
-		after, res = r.Parse(after)
+		after, res = r.parseData(after)
 		var vs Verbatim
 		if resStr, ok := res.(string); ok {
 			// 將':'跳過
@@ -190,8 +198,8 @@ func (r *respSvc) Parse(data []byte) (parseAfter []byte, res any) {
 		}
 		var ms Maps = make(map[any]any, nlen)
 		for i := 0; i < int(nlen); i++ {
-			after, res = r.Parse(after)
-			after, ms[res] = r.Parse(after)
+			after, res = r.parseData(after)
+			after, ms[res] = r.parseData(after)
 		}
 		return after, ms
 	case typeSetsSign:
@@ -202,7 +210,7 @@ func (r *respSvc) Parse(data []byte) (parseAfter []byte, res any) {
 		}
 		var ss Sets = gttype.NewHashSet[any]()
 		for i := 0; i < int(nlen); i++ {
-			after, res = r.Parse(after)
+			after, res = r.parseData(after)
 			ss.Add(res)
 		}
 		return after, ss
@@ -214,7 +222,7 @@ func (r *respSvc) Parse(data []byte) (parseAfter []byte, res any) {
 		}
 		var ps Pushes = gttype.NewHeap[any]()
 		for i := 0; i < int(nlen); i++ {
-			after, res = r.Parse(after)
+			after, res = r.parseData(after)
 			ps.Insert(res)
 		}
 		return after, ps
@@ -397,88 +405,210 @@ func (r *respSvc) clearCurRESP() {
 
 // ValidRESP 验证RESP格式
 func (r *respSvc) ValidRESP(resp []byte) (bool, error) {
+	n, b, err := r.valid(resp)
+	if n != len(resp) {
+		return false, errors.New("RESP格式验证失败")
+	}
+	return b, err
+}
+
+// valid 验证是否为RESP格式，并返回已经验证的字节数
+func (r *respSvc) valid(resp []byte) (n int, b bool, err error) {
 	if len(resp) < 3 {
-		return false, errors.New("row长度小于3")
+		return len(resp), false, errors.New("row长度小于3")
 	}
 	if !bytes.HasSuffix(resp, []byte("\r\n")) {
-		return false, errors.New("结尾不是\\r\\n")
+		return len(resp), false, errors.New("结尾不是\\r\\n")
 	}
-	before, _, _ := bytes.Cut(resp, []byte("\r\n"))
+	before, after, ok := bytes.Cut(resp, []byte("\r\n"))
 	before = before[1:]
 	switch resp[0] {
 	case typeArrSign:
-		//if string(before) == "-1" && !ok {
-		//	return true, nil
-		//}
-		//if ok {
-		//	nlen, err := strconv.Atoi(string(before))
-		//	if err != nil {
-		//		return false, err
-		//	}
-		//	if nlen < 0 {
-		//		return false, errors.New("数组长度小于0")
-		//	} else if nlen == 0 {
-		//
-		//	} else {
-		//		if !ok {
-		//			return false, errors.New("数组长度不为-1，但数据为空")
-		//		}
-		//		for i := 0; i < nlen; i++ {
-		//			, err := r.ValidRESP(after)
-		//
-		//			if ! {
-		//				return false, errors.New("数组数据格式错误")
-		//			}
-		//		}
-		//	}
-		//}
+		i, err := strconv.ParseInt(string(before), 10, 64)
+		if err != nil {
+			return len(resp), false, err
+		}
+		if i == -1 {
+			return len(before) + 3, true, nil
+		} else if i < 0 {
+			return len(resp), false, errors.New("数组长度小于0")
+		} else {
+			if !ok {
+				return len(resp), false, errors.New("与Array设定大小不相符")
+			}
+			arrval := len(before) + 3
+			for j := 0; j < int(i); j++ {
+				valid, b2, err := r.valid(after)
+				arrval += valid
+				if err != nil {
+					return valid, b2, err
+				}
+				if !b2 {
+					return valid, b2, err
+				}
+				after = after[valid:]
+			}
+			return arrval, true, nil
+		}
 	case typeBulkStringsSign:
+		i, err := strconv.ParseInt(string(before), 10, 64)
+		if err != nil {
+			return len(resp), false, err
+		}
+		if i < 0 {
+			return len(resp), false, errors.New("bulkStrings长度小于0")
+		} else {
+			cut, _, _ := bytes.Cut(after, []byte("\r\n"))
+			if int(i) != len(cut) {
+				return len(resp), false, errors.New("与bulkStrings设定大小不相符")
+			}
+			return len(before) + 3 + int(i) + 2, true, nil
+		}
 	case typeMultiErrSign:
+		i, err := strconv.ParseInt(string(before), 10, 64)
+		if err != nil {
+			return len(resp), false, err
+		}
+		if i < 0 {
+			return len(resp), false, errors.New("MultiErr长度小于0")
+		}
+		cut, _, _ := bytes.Cut(after, []byte("\r\n"))
+		if int(i) != len(cut) {
+			return len(resp), false, errors.New("与MultiErr设定大小不相符")
+		}
+		return len(before) + 3 + int(i) + 2, true, nil
 	case typeSetsSign:
+		i, err := strconv.ParseInt(string(before), 10, 64)
+		if err != nil {
+			return len(resp), false, err
+		}
+		if i < 0 {
+			return len(resp), false, errors.New("Sets长度小于0")
+		}
+		setVal := len(before) + 3
+		for j := 0; j < int(i); j++ {
+			valid, b2, err := r.valid(after)
+			setVal += valid
+			if err != nil {
+				return valid, b2, err
+			}
+			if !b2 {
+				return valid, b2, err
+			}
+			after = after[valid:]
+		}
+		return setVal, true, nil
 	case typeVervatimSign:
+		i, err := strconv.ParseInt(string(before), 10, 64)
+		if err != nil {
+			return len(resp), false, err
+		}
+		if i < 0 {
+			return len(resp), false, errors.New("VervatimString长度小于0")
+		}
+		cut, _, _ := bytes.Cut(after, []byte("\r\n"))
+		if int(i) != len(cut) {
+			return len(resp), false, errors.New("与VervatimString设定大小不相符")
+		}
+		bf2, _, _ := bytes.Cut(cut, []byte(":"))
+		if len(bf2) != 3 {
+			return len(resp), false, errors.New("与VervatimString中coding设定大小不为三字符")
+		}
+		return len(before) + 3 + int(i) + 2, true, nil
 	case typeMapsSign:
+		i, err := strconv.ParseInt(string(before), 10, 64)
+		if err != nil {
+			return len(resp), false, err
+		}
+		if i < 0 {
+			return len(resp), false, errors.New("Maps长度小于0")
+		}
+		mpval := len(before) + 3
+		for j := 0; j < int(i); j++ {
+			//	K 验证
+			valid, b2, err := r.valid(after)
+			mpval += valid
+			if err != nil {
+				return valid, b2, err
+			}
+			if !b2 {
+				return valid, b2, err
+			}
+			after = after[valid:]
+			//	V 验证
+			valid, b2, err = r.valid(after)
+			mpval += valid
+			if err != nil {
+				return valid, b2, err
+			}
+			if !b2 {
+				return valid, b2, err
+			}
+			after = after[valid:]
+		}
+		return mpval, true, nil
 	case typePushesSign:
+		i, err := strconv.ParseInt(string(before), 10, 64)
+		if err != nil {
+			return len(resp), false, err
+		}
+		if i < 0 {
+			return len(resp), false, errors.New("Pushes长度小于0")
+		}
+		pushVal := len(before) + 3
+		for j := 0; j < int(i); j++ {
+			valid, b2, err := r.valid(after)
+			pushVal += valid
+			if err != nil {
+				return valid, b2, err
+			}
+			if !b2 {
+				return valid, b2, err
+			}
+			after = after[valid:]
+		}
+		return pushVal, true, nil
 	case typeStrSign:
-		return true, nil
+		return len(before) + 3, true, nil
 	case typeIntSign:
 		_, err := strconv.ParseInt(string(before), 10, 64)
 		if err != nil {
-			return false, err
+			return len(resp), false, err
 		}
-		return true, nil
+		return len(before) + 3, true, nil
 	case typeErrSign:
-		return true, nil
+		return len(before) + 3, true, nil
 	case typeNullSign:
 		if len(before) == 0 {
-			return true, nil
+			return len(before) + 3, true, nil
 		}
-		return false, errors.New("不为-1\\r\\n")
+		return len(resp), false, errors.New("不为-1\\r\\n")
 	case typeBoolSign:
 		if len(before) != 1 {
-			return false, errors.New("bool标志不为t或f")
+			return len(resp), false, errors.New("bool标志不为t或f")
 		}
 		switch before[0] {
 		case 't', 'f':
-			return true, nil
+			return len(before) + 3, true, nil
 		default:
-			return false, errors.New("不为t或f")
+			return len(resp), false, errors.New("不为t或f")
 		}
 	case typeDoublesSign:
 		_, err := strconv.ParseFloat(string(before), 64)
 		if err != nil {
-			return false, err
+			return len(resp), false, err
 		}
-		return true, nil
+		return len(before) + 3, true, nil
 	case typeBigNumbersSign:
 		_, b := big.NewInt(0).SetString(string(before), 10)
 		if !b {
-			return false, errors.New(fmt.Sprintf("%v 不是数字", string(before)))
+			return len(resp), false, errors.New(fmt.Sprintf("%v 不是数字", string(before)))
 		}
-		return true, nil
+		return len(before) + 3, true, nil
 	default:
-		return false, errors.New(fmt.Sprintf("不支持的类型:%b", resp[0]))
+		return len(resp), false, errors.New(fmt.Sprintf("不支持的类型:%b", resp[0]))
 	}
-	return false, nil
+	return len(resp), false, nil
 }
 
 func NewRESP() RESP {
