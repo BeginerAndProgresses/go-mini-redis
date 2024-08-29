@@ -101,6 +101,10 @@ func (r *respSvc) Build() []byte {
 
 // Parse 根据Row解析RESP
 func (r *respSvc) Parse(data []byte) any {
+	vb, vberr := r.ValidRESP(data)
+	if !vb {
+		return vberr
+	}
 	after, res := r.parseData(data)
 	if len(after) == 0 {
 		return res
